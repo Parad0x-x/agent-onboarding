@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Ask another AI directly and print its answer.
+
+  ask <agent> "<prompt>"    agents: see AGENT_COMMANDS below
+
+Runs in the current directory. CLI agents may edit files here; shell commands still need approval.
+An agent called through ask cannot call ask again, so agents can't loop on each other.
+"""
+import os
+import shutil
+import subprocess
+import sys
+
+TIMEOUT_SECONDS = 900
+NESTED_FLAG = "AGENTS_ASK_ACTIVE"
+
+# Add one line per agent. Allow file edits only; keep shell commands behind approval.
+# Confirm flags with each tool's --help before adding.
+AGENT_COMMANDS = {
+    "claude": lambda prompt: ["claude", "-p", "--permission-mode", "acceptEdits", prompt],
+    "cursor": lambda prompt: ["cursor-agent", "-p", "--trust", "--output-format", "text", prompt],
+    "grok-build": lambda prompt: ["grok", "--permission-mode", "acceptEdits", "-p", prompt],
+    # "codex": lambda prompt: ["codex", "exec", "--sandbox", "workspace-write", prompt],
+    # "gemini": lambda prompt: ["gemini", "--approval-mode", "auto_edit", "-p", prompt],
+}
+
+
+def main() -> None:
+    if len(sys.argv) != 3 or sys.argv[1] not in AGENT_COMMANDS:
+        sys.exit(f'usage: ask <{"|".join(AGENT_COMMANDS)}> "<prompt>"')
+    if os.environ.get(NESTED_FLAG):
+        sys.exit("ask: refused, you were called through ask; answer the agent that asked you instead")
+    agent, prompt = sys.argv[1:]
+    try:
+        command = AGENT_COMMANDS[agent](prompt)
+        # Windows: CreateProcess cannot find .cmd launchers by bare name, so resolve through PATHEXT.
+        command[0] = shutil.which(command[0]) or command[0]
+        result = subprocess.run(command, capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS,
+                                env={**os.environ, NESTED_FLAG: "1"})
+    except subprocess.TimeoutExpired:
+        sys.exit(f"ask: {agent} gave no answer within {TIMEOUT_SECONDS}s")
+    except FileNotFoundError as err:
+        sys.exit(f"ask: {agent} is not installed ({err.filename} not found)")
+    print(result.stdout.strip() or result.stderr.strip())
+    sys.exit(result.returncode)
+
+
+if __name__ == "__main__":
+    main()
